@@ -1,8 +1,8 @@
-# LetsStreamIt installer — backup copy
+# LetsStreamIt installer
 
-Standalone mirror of the one-line installer, kept as a third download host in case both
-LetsStreamIt domains are unavailable. `install.sh` here is a byte-identical copy of
-`public/install.sh` in the panel source; keep the two in sync.
+Standalone distribution of the LetsStreamIt one-line installer, kept as a third download
+host in case the LetsStreamIt domains are unavailable. `install.sh` here is a
+byte-identical copy of `public/install.sh` in the panel source; keep the two in sync.
 
 - **Repository:** `uk-mikey/letsstreamit-installer` (default branch `main`)
 - **File:** `install.sh` — 3,044 lines, 146,112 bytes
@@ -35,11 +35,10 @@ sha256sum install.sh
 | Host | URL |
 | --- | --- |
 | Primary | `https://onair.letsstreamit.com/install.sh` |
-| Backup | `https://letsstreamit.freebuff.app/install.sh` |
-| Third fallback | `https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh` |
+| Third host | `https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh` |
 
-The script itself falls back to the Freebuff host for the source tarball when the primary
-domain does not answer, so a normal install needs only one reachable URL to start.
+If the primary domain does not answer, the script uses its own source-tarball fallback, so
+a normal install needs only one reachable URL to start.
 
 ## Notes
 
