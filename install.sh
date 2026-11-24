@@ -5,9 +5,9 @@
 #   curl -fsSL https://onair.letsstreamit.com/install.sh | sudo sh -s -- update
 #   curl -fsSL https://onair.letsstreamit.com/install.sh | UNINSTALL=yes sh -s -- uninstall
 #
-# The same script and source tarball are also served from a second host, as the
-# backup install for when the primary domain does not answer:
-#   curl -fsSL https://letsstreamit.freebuff.app/install.sh | sh
+# The same script is also published on GitHub, as the backup install for when the
+# primary domain does not answer:
+#   curl -fsSL https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh | sudo sh
 #
 # Bundles: PostgreSQL · Icecast2 · Icecast KH (built from source) ·
 #          Rocket Streaming Audio Server (RSAS) · HLS audio (Icecast origin + ffmpeg) ·
@@ -193,7 +193,9 @@ DEFAULT_SOURCE_URL="https://onair.letsstreamit.com/source"
 BACKUP_SOURCE_URL="https://letsstreamit.freebuff.app/source"
 # The install commands this script prints: primary first, backup after it.
 INSTALL_URL="https://onair.letsstreamit.com/install.sh"
-BACKUP_INSTALL_URL="https://letsstreamit.freebuff.app/install.sh"
+# The backup is the GitHub mirror, which carries the script only — the source
+# tarball keeps its own second host in BACKUP_SOURCE_URL below.
+BACKUP_INSTALL_URL="https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh"
 # A hosted manifest (src/lib/hosted-manifest.ts) can supply the source URL and the
 # version being installed; an explicit SOURCE_URL always wins over it.
 MANIFEST_URL="${MANIFEST_URL:-}"
