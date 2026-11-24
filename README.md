@@ -1,2 +1,54 @@
-# letsstreamit-installer
-Standalone backup copy of the LetsStreamIt one-line installer, for when onair.letsstreamit.com and letsstreamit.freebuff.app are both unreachable.
+# LetsStreamIt installer — backup copy
+
+Standalone mirror of the one-line installer, kept as a third download host in case both
+LetsStreamIt domains are unavailable. `install.sh` here is a byte-identical copy of
+`public/install.sh` in the panel source; keep the two in sync.
+
+- **Repository:** `uk-mikey/letsstreamit-installer` (default branch `main`)
+- **File:** `install.sh` — 3,044 lines, 146,112 bytes
+- **SHA-256:** `2eee40ba21e16527373b58d476df93a6b9d1d3688ae0732b0ef1dbdd05cb1f95`
+
+## Install
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh | sudo sh
+```
+
+```sh
+# update an existing install
+curl -fsSL https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh | sudo sh -s -- update
+
+# uninstall (prints the plan unless UNINSTALL=yes)
+curl -fsSL https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh | sudo sh -s -- uninstall
+```
+
+## Verify before running
+
+```sh
+curl -fsSL -o install.sh https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh
+sha256sum install.sh
+# expected: 2eee40ba21e16527373b58d476df93a6b9d1d3688ae0732b0ef1dbdd05cb1f95
+```
+
+## Download hosts
+
+| Host | URL |
+| --- | --- |
+| Primary | `https://onair.letsstreamit.com/install.sh` |
+| Backup | `https://letsstreamit.freebuff.app/install.sh` |
+| Third fallback | `https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh` |
+
+The script itself falls back to the Freebuff host for the source tarball when the primary
+domain does not answer, so a normal install needs only one reachable URL to start.
+
+## Notes
+
+- A normal install needs root: pipe into `sudo sh`.
+- Opt out of the install counter with `INSTALL_REPORT=0`; override its endpoint with
+  `INSTALL_REPORT_URL=…`.
+- No credentials are embedded in the script. `TUNNEL_TOKEN` is read from your environment
+  and is only needed for `PROXY_MODE=tunnel`.
+- Every option (`APP_DIR`, `SOURCE_URL`, `PANEL_PORT`, `PROXY_MODE`, engine selections) is
+  documented in the comment header at the top of `install.sh`.
+- To refresh this copy later, overwrite `install.sh` from the panel's `public/install.sh`
+  and update the SHA-256 above in the same commit.

@@ -1,0 +1,37 @@
+name: mirror-installer
+
+# One-shot bootstrap: fetches the already-published installer, checks it against the
+# recorded SHA-256 and commits it, so the copy here never depends on retyped bytes.
+# Triggers only on changes to this file, so the commit it makes cannot re-trigger it.
+on:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/mirror-installer.yml'
+
+permissions:
+  contents: write
+
+jobs:
+  mirror:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Fetch and verify installer
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 --retry-delay 2 -o install.sh \
+            https://onair.letsstreamit.com/install.sh
+          echo "2eee40ba21e16527373b58d476df93a6b9d1d3688ae0732b0ef1dbdd05cb1f95  install.sh" | sha256sum -c -
+          chmod +x install.sh
+          sh -n install.sh
+
+      - name: Commit installer
+        run: |
+          set -euo pipefail
+          git config user.name 'installer-mirror'
+          git config user.email 'installer-mirror@users.noreply.github.com'
+          git add install.sh
+          git commit -m 'Add installer mirror (sha256 2eee40ba)'
+          git push origin HEAD:main
