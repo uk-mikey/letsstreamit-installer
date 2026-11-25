@@ -5,8 +5,9 @@ host in case the LetsStreamIt domains are unavailable. `install.sh` here is a
 byte-identical copy of `public/install.sh` in the panel source; keep the two in sync.
 
 - **Repository:** `uk-mikey/letsstreamit-installer` (default branch `main`)
-- **File:** `install.sh` — 3,121 lines, 149,295 bytes
-- **SHA-256:** `4dcfb1e5fa4c5d6f43a8387a5b44616f789d5a331870645b650fb572059d3a35`
+- **File:** `install.sh` — 3,237 lines, 155,320 bytes
+- **Release:** 1.1.5
+- **SHA-256:** `d2906eda3dcd72173845e669329d858f84bb41f57a6b766f99911aafbacfc16f`
 
 ## Install
 
@@ -27,7 +28,7 @@ curl -fsSL https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/mai
 ```sh
 curl -fsSL -o install.sh https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh
 sha256sum install.sh
-# expected: 4dcfb1e5fa4c5d6f43a8387a5b44616f789d5a331870645b650fb572059d3a35
+# expected: d2906eda3dcd72173845e669329d858f84bb41f57a6b766f99911aafbacfc16f
 ```
 
 ## Download hosts

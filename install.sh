@@ -104,7 +104,9 @@
 #   TUNNEL_TOKEN=eyJ…           Cloudflare Tunnel token (required for tunnel mode)
 #   TUNNEL_URL=https://…        public URL the tunnel serves (optional; shown in
 #                               the summary when set)
-#   VIDEO_RTMP_PORT=1935         MediaMTX RTMP ingest port DJs publish to with OBS
+#   VIDEO_SRT_PORT=8890          MediaMTX SRT ingest port (UDP) — one listener beside
+#                                RTMP; SRT retransmits lost packets, so a DJ on a
+#                                lossy uplink keeps their picture
 #   SRS_RTMP_PORT=1936           SRS RTMP ingest port (the two engines can run
 #                                side by side, so they use different ports)
 #   SRS_VERSION=6.0-r3           SRS release to download (the official x86_64
@@ -191,14 +193,22 @@ DEFAULT_SOURCE_URL="https://onair.letsstreamit.com/source"
 # DEFAULT_SOURCE_URL fails and the operator did not name a SOURCE_URL of their
 # own — an address they typed is theirs to fix, not ours to route around.
 # It is a mirror, not a release channel: it can lag the primary (it served 1.1.1
-# while the primary served 1.1.4), so download_source refuses an archive older
-# than the installed panel instead of downgrading it.
+# while the primary served 1.1.4). download_source refuses an archive older than
+# the installed panel — and, through the SCRIPT_RELEASE floor below, an archive
+# older than the release this installer ships, which also protects fresh installs.
 BACKUP_SOURCE_URL="https://letsstreamit.freebuff.app/source"
 # The install commands this script prints: primary first, backup after it.
 INSTALL_URL="https://onair.letsstreamit.com/install.sh"
 # The backup is the GitHub mirror, which carries the script only — the source
 # tarball keeps its own second host in BACKUP_SOURCE_URL below.
 BACKUP_INSTALL_URL="https://raw.githubusercontent.com/uk-mikey/letsstreamit-installer/main/install.sh"
+# The release this installer ships: the source tree the primary host serves.
+# check_archive_version refuses any archive older than this on every install
+# path. Updates also compare against the installed panel, but a fresh install
+# has nothing installed — without this floor it would take whatever a lagging
+# mirror serves. Bump with each release; scripts/verify-installer.ts pins this
+# to package.json.
+SCRIPT_RELEASE="1.1.5"
 # A hosted manifest (src/lib/hosted-manifest.ts) can supply the source URL and the
 # version being installed; an explicit SOURCE_URL always wins over it.
 MANIFEST_URL="${MANIFEST_URL:-}"
@@ -207,6 +217,9 @@ if [ -n "$SOURCE_URL" ]; then SOURCE_GIVEN=1; fi
 MANIFEST_VERSION=""
 MANIFEST_SOURCE=""
 MANIFEST_UPDATE=""
+# The sha256 a release document pins its source tarball with, or "" for a bare
+# {version} feed that carries none.
+MANIFEST_SHA256=""
 # The install counter: one report per install/update, deduplicated by the id in
 # <APP_DIR>/.install-id. On by default; INSTALL_REPORT=0 is the opt-out.
 INSTALL_REPORT="${INSTALL_REPORT:-1}"
@@ -258,6 +271,7 @@ RSAS_BIN="${RSAS_BIN:-$RSAS_HOME/rsas}"
 RSAS_STATUS=""
 MTX_VERSION="v1.21.1"
 VIDEO_RTMP_PORT="${VIDEO_RTMP_PORT:-1935}"
+VIDEO_SRT_PORT="${VIDEO_SRT_PORT:-8890}"
 SRS_VERSION="${SRS_VERSION:-6.0-r3}"
 SRS_BIN="${SRS_BIN:-/usr/local/bin/srs}"
 SRS_RTMP_PORT="${SRS_RTMP_PORT:-1936}"
@@ -446,6 +460,13 @@ read_manifest() {
     MANIFEST_SOURCE="$(json_string "$MANIFEST_FILE" source)"
   fi
   MANIFEST_UPDATE="$(json_nested "$MANIFEST_FILE" update command)"
+  MANIFEST_SHA256="$(json_nested "$MANIFEST_FILE" source sha256)"
+  # Only a full 64-hex digest is a checksum; anything else is a manifest that
+  # meant something else by the key, and a wrong hash would refuse every archive.
+  case "$MANIFEST_SHA256" in
+    *[!0-9A-Fa-f]*) MANIFEST_SHA256="" ;;
+  esac
+  [ "${#MANIFEST_SHA256}" -eq 64 ] || MANIFEST_SHA256=""
   rm -f "$MANIFEST_FILE"
 
   if [ -n "$MANIFEST_VERSION" ]; then
@@ -1523,9 +1544,15 @@ ensure_nginx() {
 # Version guard
 #
 # An update unpacks the archive over the installed tree, so an older archive
-# silently downgrades a working panel. A failed download is recoverable — the
-# caller keeps the current source — a downgrade mid-update is not. Compare the
-# archive's own package.json with what is installed and refuse anything older.
+# silently downgrades a working panel — and a fresh install has nothing
+# installed to compare against, so it takes whatever a lagging mirror serves.
+# A failed download is recoverable — the caller keeps the current source — a
+# downgrade mid-update is not. Refuse anything older than the release this
+# installer ships (SCRIPT_RELEASE), and on an update also anything older than
+# what is installed. Both refusals compare the archive's own package.json. The
+# bytes themselves are checked too, against the sha256 the release document pins
+# (check_archive_checksum), because a host can serve the right version number
+# over different code.
 # ---------------------------------------------------------------------------
 first_dotted() { printf '%s' "$1" | cut -d. -f"$2"; }
 
@@ -1561,13 +1588,21 @@ archive_version() {
   printf '%s' "$ARCHIVE_VERSION"
 }
 
-# 0 = the archive may be installed, 1 = refuse it (older than what is installed).
+# 0 = the archive may be installed, 1 = refuse it (older than the release floor
+# or older than what is installed).
 check_archive_version() {
   [ "$DRY_RUN" = "1" ] && return 0
-  [ -f "$APP_DIR/package.json" ] || return 0
-  GUARD_INSTALLED="$(json_string "$APP_DIR/package.json" version)"
   GUARD_ARCHIVE="$(archive_version "$1" || true)"
-  [ -n "$GUARD_INSTALLED" ] && [ -n "$GUARD_ARCHIVE" ] || return 0
+  [ -n "$GUARD_ARCHIVE" ] || return 0
+  # Release floor: this installer ships $SCRIPT_RELEASE, so no install path —
+  # fresh install or update — may fetch an older build.
+  if version_newer "$SCRIPT_RELEASE" "$GUARD_ARCHIVE"; then
+    warn "refusing the archive from $2: it carries $GUARD_ARCHIVE but this installer ships $SCRIPT_RELEASE — installs must not go backwards"
+    return 1
+  fi
+  [ -f "$APP_DIR/package.json" ] || { info "source version $GUARD_ARCHIVE (fresh install)"; return 0; }
+  GUARD_INSTALLED="$(json_string "$APP_DIR/package.json" version)"
+  [ -n "$GUARD_INSTALLED" ] || return 0
   if [ "$GUARD_ARCHIVE" = "$GUARD_INSTALLED" ]; then
     info "source version $GUARD_ARCHIVE (already installed)"
     return 0
@@ -1584,20 +1619,63 @@ check_archive_version() {
   return 0
 }
 
+# The SHA-256 of a file, from whichever of the three usual tools this host has.
+file_sha256() {
+  [ -f "$1" ] || return 1
+  if command -v sha256sum >/dev/null 2>&1; then
+    sha256sum "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v shasum >/dev/null 2>&1; then
+    shasum -a 256 "$1" 2>/dev/null | cut -d' ' -f1
+  elif command -v openssl >/dev/null 2>&1; then
+    openssl dgst -sha256 "$1" 2>/dev/null | sed 's/.*= *//'
+  else
+    return 1
+  fi
+}
+
+# 0 = the archive is the one the release document pins, 1 = refuse it.
+#
+# The version guard says "not older"; this says "exactly the bytes the release
+# published". Both matter once the panel updates itself from a feed: an archive
+# served by a host that has been tampered with, or that is not the release at
+# all, must not be unpacked over a working panel. A feed with no source object
+# carries no digest — that is a hand-written manifest, which is documented and
+# still allowed, while a feed that does pin one is held to it.
+check_archive_checksum() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  [ -n "$MANIFEST_SHA256" ] || return 0
+  # An operator who named their own SOURCE_URL is not fetching the manifest's build.
+  [ "$SOURCE_GIVEN" = "1" ] && return 0
+  CHECKSUM_ACTUAL="$(file_sha256 "$1" || true)"
+  if [ -z "$CHECKSUM_ACTUAL" ]; then
+    warn "could not take a sha256 of the archive (no sha256sum, shasum or openssl) — installing it unverified"
+    return 0
+  fi
+  if [ "$CHECKSUM_ACTUAL" != "$MANIFEST_SHA256" ]; then
+    warn "refusing the archive from $2: its sha256 is $CHECKSUM_ACTUAL but the manifest pins $MANIFEST_SHA256"
+    return 1
+  fi
+  info "source checksum matches the manifest"
+  return 0
+}
+
 # Download a source tarball to $1, falling back to the backup host once when the
-# primary one does not answer — or answers with an archive older than the one
-# already installed, which the guard above refuses.
+# primary one does not answer — or answers with an archive below the release
+# floor, older than the installed panel, or whose sha256 is not the one the
+# release document pins, all of which the guards above refuse.
 download_source() {
   DEST="$1"
   if x "curl -fsSL --retry 2 -o \"$DEST\" \"$SOURCE_URL\" </dev/null" &&
-     check_archive_version "$DEST" "$SOURCE_URL"; then
+     check_archive_version "$DEST" "$SOURCE_URL" &&
+     check_archive_checksum "$DEST" "$SOURCE_URL"; then
     return 0
   fi
   if [ "$SOURCE_GIVEN" = "0" ] && [ -n "$BACKUP_SOURCE_URL" ] && [ "$BACKUP_SOURCE_URL" != "$SOURCE_URL" ]; then
     warn "could not use $SOURCE_URL — trying the backup host"
     info "backup: $BACKUP_SOURCE_URL"
     if x "curl -fsSL --retry 2 -o \"$DEST\" \"$BACKUP_SOURCE_URL\" </dev/null" &&
-       check_archive_version "$DEST" "$BACKUP_SOURCE_URL"; then
+       check_archive_version "$DEST" "$BACKUP_SOURCE_URL" &&
+       check_archive_checksum "$DEST" "$BACKUP_SOURCE_URL"; then
       return 0
     fi
     warn "the backup host did not provide a usable archive either"
@@ -1820,6 +1898,19 @@ firewall_list() {
   printf '%s' "$LIST"
 }
 
+# The UDP ports to open. Only MediaMTX's SRT listener needs one: every other
+# rule this install makes is TCP, and a firewall rule for the wrong transport is
+# the same as no rule at all — SRT is UDP, so 8890/tcp would open nothing.
+firewall_udp_ports() {
+  UDP=""
+  if valid_port "$VIDEO_SRT_PORT"; then
+    UDP="$VIDEO_SRT_PORT"
+  else
+    warn "VIDEO_SRT_PORT=$VIDEO_SRT_PORT is not a port — SRT is not opened here; set the port MediaMTX listens on and re-run"
+  fi
+  printf '%s' "$UDP"
+}
+
 # Best-effort: open every port this install needs on the host firewall — the
 # panel's own ports, the station range, FTP (control + passive) and every RTMP
 # ingest (MediaMTX, SRS, NGINX RTMP, plus Red5 Pro's port for operators who
@@ -1837,12 +1928,14 @@ open_firewall() {
     info "OPEN_FIREWALL=0 — no rules added; allow these yourself:"
     info "  single ports: $(firewall_single_ports)"
     info "  ranges:       $(firewall_ranges)"
-    FIREWALL_LINE="OPEN_FIREWALL=0 — nothing was changed; allow $(firewall_list)/tcp yourself"
+    info "  UDP (SRT):    $(firewall_udp_ports)"
+    FIREWALL_LINE="OPEN_FIREWALL=0 — nothing was changed; allow $(firewall_list)/tcp and $(firewall_udp_ports)/udp yourself"
     return 0
   fi
 
   PORTS="$(firewall_single_ports)"
   RANGES="$(firewall_ranges)"
+  UDP_PORTS="$(firewall_udp_ports)"
   if [ -z "$PORTS$RANGES" ]; then
     if [ "$PROXY_MODE" = "tunnel" ]; then
       say "Firewall"
@@ -1859,8 +1952,11 @@ open_firewall() {
     for r in $RANGES; do
       x "$SUDO ufw allow $r/tcp" || warn "could not add a ufw rule for $r/tcp"
     done
-    info "allowed $(firewall_list)/tcp in ufw"
-    FIREWALL_LINE="ufw: allowed $(firewall_list)/tcp"
+    for p in $UDP_PORTS; do
+      x "$SUDO ufw allow $p/udp" || warn "could not add a ufw rule for $p/udp"
+    done
+    info "allowed $(firewall_list)/tcp and $UDP_PORTS/udp in ufw"
+    FIREWALL_LINE="ufw: allowed $(firewall_list)/tcp and $UDP_PORTS/udp"
   elif command -v firewall-cmd >/dev/null 2>&1 && $SUDO firewall-cmd --state >/dev/null 2>&1; then
     say "Firewall (firewalld)"
     for p in $PORTS; do
@@ -1871,9 +1967,12 @@ open_firewall() {
       RANGE_FW="$(printf '%s' "$r" | tr ':' '-')"
       x "$SUDO firewall-cmd --permanent --add-port=$RANGE_FW/tcp" || warn "could not add a firewalld rule for $RANGE_FW/tcp"
     done
+    for p in $UDP_PORTS; do
+      x "$SUDO firewall-cmd --permanent --add-port=$p/udp" || warn "could not add a firewalld rule for $p/udp"
+    done
     x "$SUDO firewall-cmd --reload" || warn "firewalld reload failed"
-    info "allowed $(firewall_list)/tcp in firewalld"
-    FIREWALL_LINE="firewalld: allowed $(firewall_list)/tcp"
+    info "allowed $(firewall_list)/tcp and $UDP_PORTS/udp in firewalld"
+    FIREWALL_LINE="firewalld: allowed $(firewall_list)/tcp and $UDP_PORTS/udp"
   else
     # Not a pass: with no host firewall to read, the provider's security group is
     # the only thing between this host and the internet, and the port check will
@@ -2270,6 +2369,19 @@ start_panel() {
   if { [ "$(id -u)" = "0" ] || [ -n "$SUDO" ]; } &&
      command -v systemctl >/dev/null 2>&1 && [ -d /run/systemd/system ]; then
     UNIT="/etc/systemd/system/letsstreamit.service"
+    # Per-station engine caps need a cgroup subtree the panel may write to.
+    # `Delegate=yes` hands it over; `DelegateSubgroup=` puts the panel's own
+    # processes in a leaf, which is what lets the station cgroups below carry
+    # memory/cpu/pids limits (a cgroup with processes in it cannot enable domain
+    # controllers). It exists from systemd 254; on older versions
+    # src/lib/engine-limits.ts moves the panel's own processes into a leaf
+    # itself, and the Health tab reports which of the two worked.
+    SYSTEMD_MAJOR="$(systemctl --version 2>/dev/null | sed -n '1s/^systemd \([0-9][0-9]*\).*/\1/p')"
+    if [ -n "$SYSTEMD_MAJOR" ] && [ "$SYSTEMD_MAJOR" -ge 254 ] 2>/dev/null; then
+      DELEGATE_SUBGROUP="DelegateSubgroup=panel"
+    else
+      DELEGATE_SUBGROUP="# DelegateSubgroup=panel needs systemd 254+"
+    fi
     UNIT_BODY="$(printf '%s\n' \
       "[Unit]" \
       "Description=LetsStreamIt radio control panel" \
@@ -2285,6 +2397,10 @@ start_panel() {
       "ExecStart=$NPM_BIN run start" \
       "Restart=on-failure" \
       "RestartSec=3" \
+      "# Hand the panel its own cgroup subtree so it can cap each station's" \
+      "# engines (memory/cpu/pids) without root, see src/lib/engine-limits.ts." \
+      "Delegate=yes" \
+      "$DELEGATE_SUBGROUP" \
       "" \
       "[Install]" \
       "WantedBy=multi-user.target")"
@@ -3050,7 +3166,7 @@ PUBLIC_URL="$(public_scheme)://$(public_host)$(public_port_suffix)"
 # summary. Each one is opened on the host firewall above (unless OPEN_FIREWALL=0).
 # The panel's port check has rows for the station range, FTP and every video
 # ingest, including the optional Red5 Pro port opened here.
-OTHER_PORTS="$STATION_PORT_MIN-$STATION_PORT_MAX (stations), $VIDEO_RTMP_PORT (MediaMTX, RTMP from OBS), $SRS_RTMP_PORT (SRS, RTMP from OBS), $RED5_RTMP_PORT (Red5 Pro, optional licensed archive; RTMP from OBS), $RED5_FREE_RTMP_PORT (Red5 Free, RTMP from OBS), $NGINX_RTMP_PORT (NGINX RTMP, RTMP from OBS)"
+OTHER_PORTS="$STATION_PORT_MIN-$STATION_PORT_MAX (stations), $VIDEO_RTMP_PORT (MediaMTX, RTMP from OBS), $VIDEO_SRT_PORT/udp (MediaMTX, SRT from OBS), $SRS_RTMP_PORT (SRS, RTMP from OBS), $RED5_RTMP_PORT (Red5 Pro, optional licensed archive; RTMP from OBS), $RED5_FREE_RTMP_PORT (Red5 Free, RTMP from OBS), $NGINX_RTMP_PORT (NGINX RTMP, RTMP from OBS)"
 if [ "$OPEN_FTP" = "1" ]; then
   OTHER_PORTS="$OTHER_PORTS, $FTP_PORT + $FTP_PASSIVE_MIN-$FTP_PASSIVE_MAX (FTP, all interfaces when enabled)"
 fi
