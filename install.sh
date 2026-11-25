@@ -190,6 +190,9 @@ DEFAULT_SOURCE_URL="https://onair.letsstreamit.com/source"
 # The same tarball, from a second host. Only reached when a download from
 # DEFAULT_SOURCE_URL fails and the operator did not name a SOURCE_URL of their
 # own — an address they typed is theirs to fix, not ours to route around.
+# It is a mirror, not a release channel: it can lag the primary (it served 1.1.1
+# while the primary served 1.1.4), so download_source refuses an archive older
+# than the installed panel instead of downgrading it.
 BACKUP_SOURCE_URL="https://letsstreamit.freebuff.app/source"
 # The install commands this script prints: primary first, backup after it.
 INSTALL_URL="https://onair.letsstreamit.com/install.sh"
@@ -1516,16 +1519,88 @@ ensure_nginx() {
 # panel without .next cannot start, and silently skipping it produces exactly
 # the broken install this function now prevents.
 # ---------------------------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Version guard
+#
+# An update unpacks the archive over the installed tree, so an older archive
+# silently downgrades a working panel. A failed download is recoverable — the
+# caller keeps the current source — a downgrade mid-update is not. Compare the
+# archive's own package.json with what is installed and refuse anything older.
+# ---------------------------------------------------------------------------
+first_dotted() { printf '%s' "$1" | cut -d. -f"$2"; }
+
+# True when dotted numeric version $1 is greater than $2.
+version_newer() {
+  [ -n "$1" ] && [ -n "$2" ] || return 1
+  NEWER_I=1
+  while [ "$NEWER_I" -le 3 ]; do
+    NEWER_A="$(first_dotted "$1" "$NEWER_I")"
+    NEWER_B="$(first_dotted "$2" "$NEWER_I")"
+    NEWER_A="${NEWER_A:-0}"
+    NEWER_B="${NEWER_B:-0}"
+    case "$NEWER_A$NEWER_B" in *[!0-9]*) return 1 ;; esac
+    [ "$NEWER_A" -gt "$NEWER_B" ] && return 0
+    [ "$NEWER_A" -lt "$NEWER_B" ] && return 1
+    NEWER_I=$((NEWER_I + 1))
+  done
+  return 1
+}
+
+# The version a downloaded tarball carries (its package.json), or nothing.
+archive_version() {
+  [ -f "$1" ] || return 1
+  ARCHIVE_ENTRY="$(tar -tzf "$1" 2>/dev/null | grep -E '(^|/)package\.json$' | head -n 1 || true)"
+  [ -n "$ARCHIVE_ENTRY" ] || return 1
+  ARCHIVE_JSON="$(mktemp)"
+  if ! tar -xzOf "$1" "$ARCHIVE_ENTRY" > "$ARCHIVE_JSON" 2>/dev/null; then
+    rm -f "$ARCHIVE_JSON"
+    return 1
+  fi
+  ARCHIVE_VERSION="$(json_string "$ARCHIVE_JSON" version)"
+  rm -f "$ARCHIVE_JSON"
+  printf '%s' "$ARCHIVE_VERSION"
+}
+
+# 0 = the archive may be installed, 1 = refuse it (older than what is installed).
+check_archive_version() {
+  [ "$DRY_RUN" = "1" ] && return 0
+  [ -f "$APP_DIR/package.json" ] || return 0
+  GUARD_INSTALLED="$(json_string "$APP_DIR/package.json" version)"
+  GUARD_ARCHIVE="$(archive_version "$1" || true)"
+  [ -n "$GUARD_INSTALLED" ] && [ -n "$GUARD_ARCHIVE" ] || return 0
+  if [ "$GUARD_ARCHIVE" = "$GUARD_INSTALLED" ]; then
+    info "source version $GUARD_ARCHIVE (already installed)"
+    return 0
+  fi
+  if version_newer "$GUARD_ARCHIVE" "$GUARD_INSTALLED"; then
+    info "source version $GUARD_ARCHIVE (installed $GUARD_INSTALLED)"
+    return 0
+  fi
+  if version_newer "$GUARD_INSTALLED" "$GUARD_ARCHIVE"; then
+    warn "refusing the archive from $2: it carries $GUARD_ARCHIVE but $GUARD_INSTALLED is installed — an update must not go backwards"
+    return 1
+  fi
+  warn "$2 carries version '$GUARD_ARCHIVE', which cannot be compared with the installed $GUARD_INSTALLED — using it"
+  return 0
+}
+
 # Download a source tarball to $1, falling back to the backup host once when the
-# primary one does not answer. Used everywhere a tarball is fetched, so an
-# install (or an update) keeps working through a DNS or TLS fault on one host.
+# primary one does not answer — or answers with an archive older than the one
+# already installed, which the guard above refuses.
 download_source() {
   DEST="$1"
-  x "curl -fsSL --retry 2 -o \"$DEST\" \"$SOURCE_URL\" </dev/null" && return 0
+  if x "curl -fsSL --retry 2 -o \"$DEST\" \"$SOURCE_URL\" </dev/null" &&
+     check_archive_version "$DEST" "$SOURCE_URL"; then
+    return 0
+  fi
   if [ "$SOURCE_GIVEN" = "0" ] && [ -n "$BACKUP_SOURCE_URL" ] && [ "$BACKUP_SOURCE_URL" != "$SOURCE_URL" ]; then
-    warn "could not reach $SOURCE_URL — trying the backup host"
+    warn "could not use $SOURCE_URL — trying the backup host"
     info "backup: $BACKUP_SOURCE_URL"
-    x "curl -fsSL --retry 2 -o \"$DEST\" \"$BACKUP_SOURCE_URL\" </dev/null" && return 0
+    if x "curl -fsSL --retry 2 -o \"$DEST\" \"$BACKUP_SOURCE_URL\" </dev/null" &&
+       check_archive_version "$DEST" "$BACKUP_SOURCE_URL"; then
+      return 0
+    fi
+    warn "the backup host did not provide a usable archive either"
   fi
   return 1
 }
